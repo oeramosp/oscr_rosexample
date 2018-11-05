@@ -1,0 +1,90 @@
+#!/usr/bin/env python
+#
+# Test the parsing of the model of a simple revolute robot with a free floating
+# base and 6 dof (2 chains of 3 dof each)
+#
+# To use it:
+#
+#     1) If the floating base is not used (a fixed based is assumed):
+#           roslaunch oscr_rosexample display-fixed.launch
+#           rosrun oscr_rosexample model_parse_py --base fixed
+#
+#     2) If the floating base is used:
+#            roslaunch oscr_rosexample display.launch
+#            rosrun oscr_rosexample model_parse_py
+#
+# The backend can be specified using the option --back, where the argument can
+# be pin (default), rbdl, or ff6dof (analytic computation)
+#
+# To run the file interactively, go to the folder scripts and use ipython -i
+# instead of rosrun
+#
+
+
+import numpy as np
+from optparse import OptionParser
+from oscr.ros_robot import RosRobot
+
+
+if __name__ == '__main__':
+
+    # Parse the arguments
+    parser = OptionParser()
+    parser.add_option("--back", dest="back", default="pin",
+                      help="back can be pin (default), rbdl, or ff6dof")
+    parser.add_option("--base", dest="base", default="floating",
+                      help="base can be floating (default) or fixed")
+    (options, args) = parser.parse_args()
+    # Backend: 'pin' (default), 'rbdl', or 'ff6dof' (analytic)
+    backend = options.back
+    # Floating base? 'floating' (default) or 'fixed'
+    if (options.base=='floating'): fbase = True
+    elif (options.base=='fixed'): fbase = False
+    else: print 'Option not supported: use floating or fixed'
+    
+    # Frequency
+    f = 100.0
+    # Robot simulation
+    robot = RosRobot('ff6dofModelPy', 'oscr_rosexample',
+                     '/urdf/ff6dof.urdf', f, fbase, backend)
+    # Print robot model information
+    robot.printModelInfo()
+
+    # Joint configuration
+    q = np.array([[0.75, -0.75, 1.57, -0.75, 0.75, -1.57]]).T
+    if (fbase):
+        # Add floating base configuration
+        qb = np.array([[0., 0., 0., 1., 0., 0., 0.]]).T
+        q = np.vstack([qb, q])
+        # Change base position
+        q[0] = 0.2
+        q[1] = 0.5
+        q[2] = 0.4
+        # Change base orientation
+        t = np.pi/3
+        q[3] = np.cos(t);
+        q[4] = np.sin(t)
+        #q[4][0] = np.sin(t)/np.sqrt(2.); q[5][0] = np.sin(t)/np.sqrt(2.)
+    robot.update(q)
+
+    # Print positions
+    position1 = robot.linkPosition(robot.mlink['larm3'])
+    position2 = robot.linkPosition(robot.mlink['lleg3'])
+    print "Link larm3 position: ", position1.transpose()
+    print "Link lleg3 position: ", position2.transpose()
+
+    # Ball markers
+    robot.initRobotBallMarkers(['RED','RED'], ['larm3','lleg3'])
+    # Frame markers
+    robot.initRobotFrameMarkers([1.0, 1.0],['larm3','lleg3'])
+
+    # Example of joint motion
+    for k in range(200):
+        q[robot.mjoint['larm_j1']] += 0.005
+        q[robot.mjoint['larm_j2']] += 0.010
+        q[robot.mjoint['larm_j3']] -= 0.015
+        q[robot.mjoint['lleg_j1']] -= 0.005
+        q[robot.mjoint['lleg_j2']] -= 0.010
+        q[robot.mjoint['lleg_j3']] += 0.015
+        robot.updateWithMarkers(q)
+        robot.rate.sleep()

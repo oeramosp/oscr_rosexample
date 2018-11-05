@@ -1,0 +1,113 @@
+#!/usr/bin/env python
+#
+# Generate kinematic motion for a simple revolute robot with a free floating
+# base and 6 dof (2 chains of 3 dof each)
+#
+# To use it:
+#     1) If floating base is not used (fbase = False):
+#            roslaunch robots_oscr ff6dof-fixed.launch
+#        If floating base is used (fbase = True):
+#            roslaunch robots_oscr ff6dof.launch
+#
+#     2) + Option 1 (interactive):
+#          roscd robots_oscr/scripts/motion; ipython -i ff6dof_motion_py
+#        + Option 2:
+#          rosrun robots_oscr ff6dof_motion_py
+#
+
+
+import numpy as np
+import rospy
+from optparse import OptionParser
+
+from oscr.ros_kine_sim import RosKineSim
+from oscr.ros_logs import RosLogs
+from oscr.utils import incPosition, incPoseLocal
+
+
+if __name__ == '__main__':
+
+    # Parse the arguments
+    parser = OptionParser()
+    parser.add_option("--back", dest="back", default="pin",
+                      help="back can be pin (default), rbdl, or ff6dof")
+    parser.add_option("--base", dest="base", default="floating",
+                      help="base can be floating (default) or fixed")
+    parser.add_option("--solver", dest="solver", default="hqp",
+                      help="solver can be hqp (default), ns (nullspace) or \
+                      wqp (weighted qp")
+    (options, args) = parser.parse_args()
+    # Backend: 'pin' (default), 'rbdl', or 'ff6dof' (analytic)
+    backend = options.back
+    # Floating base? 'floating' (default) or 'fixed'
+    if (options.base=='floating'): fbase = True
+    elif (options.base=='fixed'): fbase = False
+    else: print 'Option not supported: use floating or fixed'
+    # Solver
+    solvertype = options.solver
+    
+    # Frequency
+    f = 50.0
+    # Robot simulation instance
+    sim = RosKineSim('ff6dofMotion', 'oscr_rosexample',
+                     '/urdf/ff6dof.urdf', f, fbase, backend)
+
+    # Initial joint configuration
+    q = np.array([0.75, -0.75, 1.57, -0.75, 0.75, -1.57]).T
+    if (fbase):
+        # Add floating base configuration
+        qbase = np.array([0., 0., 0., 1., 0., 0., 0.]).T
+        q = np.hstack((qbase, q))
+        # Change floating base position
+        q[0] = 0.3
+        q[1] = 0.2
+        q[2] = 0.4
+        # Change floating base orientation
+        t = np.pi/3
+        q[3] = np.cos(t);
+        # q[4] = np.sin(t)
+        q[4] = np.sin(t)/np.sqrt(2.); q[5] = np.sin(t)/np.sqrt(2.)
+    sim.update(q)
+
+    # Initialize solver: use 'HQP', 'NS' or 'WQP'
+    if solvertype == 'hqp': sim.initKineSolver(q)  # default is HQP
+    elif solvertype == 'ns': sim.initKineSolver(q, 'NS')
+    elif solvertype == 'wqp': sim.initKineSolver(q, 'WQP')
+    else: print 'Solver type not supported'
+
+    # Tasks
+    sim.initKineTaskPose('larm3','position','LHand')
+    # sim.initKineTaskPose('larm3','pose','LHand', 1.0)
+    sim.initKineTaskPose('lleg3','position','LAnkle')
+
+    # Logs
+    logs = RosLogs('../data/', 'ff6dof_1_', f, False)
+    logs.addTask(sim.task['LHand'])
+    logs.addPoses(['larm3', 'lleg3'], sim.robot)
+    
+    # Keep LAnkle on place
+    sim.task['LAnkle'].keep(10.0)
+
+    # Set desired position for LHand
+    currentHand = sim.task['LHand'].getSensedValue()
+    # print currentHand
+    desiredHand = incPosition(currentHand, [0.20, -0.20, 0.50])
+    # desiredHand = incPoseLocal(currentHand, [0.0, -0.20, 0.20],
+    #                            (0.0, (1., 0., 0.)))
+    #print desiredHand
+    sim.task['LHand'].setDesiredValue(desiredHand)
+
+    # Add task to the solver
+    if (fbase):
+        sim.pushTask(sim.task['LAnkle'])
+        sim.pushTask(sim.task['LHand'])
+    else:
+        sim.pushTask(sim.task['LHand'])
+
+    while not rospy.is_shutdown():
+        logs.save(q)
+        qdes = sim.getPositionControl(q)
+        sim.update(qdes)
+        q = qdes.copy();
+        sim.rate.sleep()
+    logs.close()
